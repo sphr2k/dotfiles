@@ -82,10 +82,12 @@ fi
 command -v chezmoi >/dev/null 2>&1 || { echo "chezmoi not found on sprite"; exit 127; }
 chezmoi init --apply --source "${REMOTE_DIR}"
 
-# Run script explicitly: with init --apply --source, chezmoi does not run run_* scripts (see https://github.com/twpayne/chezmoi/issues/3737)
-if [ -f "${REMOTE_DIR}/run_brew_bundle.sh" ]; then
-  CHEZMOI_SOURCE_DIR="${REMOTE_DIR}" /bin/bash "${REMOTE_DIR}/run_brew_bundle.sh" || true
-fi
+# Run scripts explicitly: with init --apply --source, chezmoi does not run run_* scripts (see https://github.com/twpayne/chezmoi/issues/3737)
+for script in run_brew_bundle.sh run_fisher_install.sh run_tide_configure.sh; do
+  if [ -f "${REMOTE_DIR}/\${script}" ]; then
+    CHEZMOI_SOURCE_DIR="${REMOTE_DIR}" /bin/bash "${REMOTE_DIR}/\${script}" || true
+  fi
+done
 EOF
 
 echo "entering fish shell"
