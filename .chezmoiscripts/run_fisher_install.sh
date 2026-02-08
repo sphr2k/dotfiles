@@ -2,17 +2,19 @@
 
 set -euo pipefail
 
-dbg() { echo "[run_fisher_install] $*" >&2; }
+_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=.chezmoiscripts/log.sh
+[ -f "${_dir}/log.sh" ] && source "${_dir}/log.sh" || log() { local l="${1:-info}"; shift; echo "[$l] $*" >&2; }
 
-dbg "start"
+log info "start"
 
 if ! command -v fish >/dev/null 2>&1; then
-  dbg "fish not found, skipping fisher install"
+  log warn "fish not found, skipping fisher install"
   exit 0
 fi
-dbg "fish found: $(command -v fish)"
+log info "fish found: $(command -v fish)"
 
-dbg "running fisher install via fish"
+log info "running fisher install via fish"
 fish -c '
   if type -q fisher
     fisher install \
@@ -32,6 +34,6 @@ fish -c '
     echo "[run_fisher_install] fisher not loaded in fish" >&2
     exit 1
   end
-' || dbg "fisher install failed (exit $?)"
+' || log error "fisher install failed (exit $?)"
 
-dbg "done"
+log info "done"

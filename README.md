@@ -24,8 +24,8 @@ This will clone the repo and run `chezmoi apply` (replaces your user/repo).
 chezmoi init --apply https://github.com/sphr2k/dotfiles.git
 ```
 
-With `chezmoi init --apply <repo>`, the `run_brew_bundle.sh` hook runs during apply (brew bundle, fisher, tide). If you use `chezmoi init --apply --source .` (local dir), run it yourself after apply:
+With `chezmoi init --apply <repo>`, the run hooks in `.chezmoiscripts/` run during apply (brew bundle, fisher, tide). If you use `chezmoi init --apply --source .` (local dir), run them yourself after apply:
 
 ```bash
-./run_brew_bundle.sh
+for f in .chezmoiscripts/run_*.sh; do [ -f "$f" ] && CHEZMOI_SOURCE_DIR=. bash "$f"; done
 ```

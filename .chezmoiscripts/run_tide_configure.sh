@@ -2,17 +2,19 @@
 
 set -euo pipefail
 
-dbg() { echo "[run_tide_configure] $*" >&2; }
+_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=.chezmoiscripts/log.sh
+[ -f "${_dir}/log.sh" ] && source "${_dir}/log.sh" || log() { local l="${1:-info}"; shift; echo "[$l] $*" >&2; }
 
-dbg "start"
+log info "start"
 
 if ! command -v fish >/dev/null 2>&1; then
-  dbg "fish not found, skipping tide configure"
+  log warn "fish not found, skipping tide configure"
   exit 0
 fi
-dbg "fish found: $(command -v fish)"
+log info "fish found: $(command -v fish)"
 
-dbg "running tide configure via fish"
+log info "running tide configure via fish"
 fish -c '
   if type -q tide
     tide configure --auto --style=Classic --prompt_colors="True color" --classic_prompt_color=Lightest --show_time=No --classic_prompt_separators=Angled --powerline_prompt_heads=Sharp --powerline_prompt_tails=Flat --powerline_prompt_style="One line" --prompt_spacing=Compact --icons="Few icons" --transient=Yes
@@ -20,6 +22,6 @@ fish -c '
     echo "[run_tide_configure] tide not found" >&2
     exit 1
   end
-' || dbg "tide configure failed (exit $?)"
+' || log error "tide configure failed (exit $?)"
 
-dbg "done"
+log info "done"
