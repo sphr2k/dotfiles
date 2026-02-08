@@ -1,5 +1,6 @@
-### fish greeting
+### Prompt
 set fish_greeting
+set -gx VIRTUAL_ENV_DISABLE_PROMPT 1
 
 ### Additional configs
 for file in $HOME/.config/fish/config.fish.d/*.fish
