@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.idea/
+*.iml
+
+# Local overrides (e.g. chezmoi run scripts)
+*.local
+
+# Fish (machine-specific state)
+fish_variables

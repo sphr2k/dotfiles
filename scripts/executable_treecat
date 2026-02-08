@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import os
+import sys
+from pathlib import Path
+from typing import Iterable, Optional, List, Set
+
+WILDCARDS = set("*?[]")
+
+DEFAULT_EXCLUDES = [
+    # General Build & Outputs
+    "dist", "build", "target", "out", "bin", "obj", "vendor", ".output",
+    # Node / Bun / Frontend
+    "node_modules", "bower_components", ".next", ".turbo", ".cache", ".npm", ".yarn",
+    ".svelte-kit", ".expo", "storybook-static", ".nuxt", ".vuepress", ".docusaurus",
+    # Python
+    "__pycache__", "venv", "env",
+    # Lock Files
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock",
+    "*.lock", "*.lock.json", "*.lock.yaml", "*.lock.yml", "*.lock.toml",
+    # Docs
+    "*.json", "*.yaml", "*.yml", "*.toml",
+    # System / Misc
+    ".DS_Store", ".git", ".svn", ".hg"
+]
+
+def load_gitignore(root: Path) -> List[str]:
+    ignore_path = root / ".gitignore"
+    patterns: List[str] = []
+    if ignore_path.exists():
+        try:
+            with ignore_path.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        # Basic .gitignore pattern handling for our simple matcher
+                        patterns.append(line.rstrip("/"))
+        except Exception:
+            pass
+    return patterns
+
+def pat_has_wildcards(pat: str) -> bool:
+    return any(c in pat for c in WILDCARDS)
+
+def matches_any(rel_path_posix: str, base_name: str, patterns: Iterable[str]) -> bool:
+    # Match both against basename and full relative path; if pattern has no wildcards,
+    # use substring semantics for convenience (e.g., 'pnpm-lock' matches 'pnpm-lock.yaml').
+    for pat in patterns:
+        if pat_has_wildcards(pat):
+            if fnmatch.fnmatch(base_name, pat) or fnmatch.fnmatch(rel_path_posix, pat):
+                return True
+        else:
+            if pat in base_name or pat in rel_path_posix:
+                return True
+    return False
+
+def is_hidden_path_parts(parts: Iterable[str]) -> bool:
+    # Any dot-prefix component marks a hidden path on POSIX
+    return any(part.startswith(".") for part in parts)
+
+def iter_files(
+    root: Path,
+    exts: Optional[Set[str]],
+    include_hidden: bool,
+    excludes: List[str],
+    max_depth: Optional[int],
+) -> List[Path]:
+    files: List[Path] = []
+    root_depth = len(root.parts)
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        pdir = Path(dirpath)
+        rel_dir = "" if pdir == root else pdir.relative_to(root).as_posix()
+
+        # Enforce depth by pruning further descent
+        if max_depth is not None:
+            depth_here = len(pdir.parts) - root_depth
+            if depth_here >= max_depth:
+                dirnames[:] = []
+            else:
+                # Prune directories by hidden and excludes
+                new_dirs: List[str] = []
+                for d in dirnames:
+                    if not include_hidden and d.startswith("."):
+                        continue
+                    dp_rel = (Path(rel_dir) / d).as_posix() if rel_dir else d
+                    if matches_any(dp_rel, d, excludes):
+                        continue
+                    new_dirs.append(d)
+                dirnames[:] = new_dirs
+        else:
+            # Unlimited depth: prune dirs by hidden and excludes
+            new_dirs: List[str] = []
+            for d in dirnames:
+                if not include_hidden and d.startswith("."):
+                    continue
+                dp_rel = (Path(rel_dir) / d).as_posix() if rel_dir else d
+                if matches_any(dp_rel, d, excludes):
+                    continue
+                new_dirs.append(d)
+            dirnames[:] = new_dirs
+
+        # If current directory is hidden and not including hidden, skip files here
+        if not include_hidden and pdir != root and is_hidden_path_parts(pdir.relative_to(root).parts):
+            continue
+        # If current directory is excluded by pattern, skip files here
+        if rel_dir and matches_any(rel_dir, Path(rel_dir).name, excludes):
+            continue
+
+        for name in filenames:
+            if not include_hidden and name.startswith("."):
+                continue
+            rel_file = (Path(rel_dir) / name).as_posix() if rel_dir else name
+            if matches_any(rel_file, name, excludes):
+                continue
+            fp = pdir / name
+            if exts:
+                suf = fp.suffix  # includes leading dot
+                if not (suf and suf.lstrip(".").lower() in exts):
+                    continue
+            files.append(fp)
+
+    return files
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="treecat",
+        description="Concatenate files from the current directory tree, with separators, filtering by extension and patterns.",
+    )
+    parser.add_argument(
+        "-e", "--ext",
+        action="append",
+        metavar="EXT",
+        help="File extension to include (with or without leading dot). Repeatable. If omitted, include all files.",
+    )
+    parser.add_argument(
+        "-d", "--depth",
+        type=int,
+        default=None,
+        help="Max recursion depth (0=current dir only). Default: unlimited.",
+    )
+    parser.add_argument(
+        "-H", "--hidden",
+        action="store_true",
+        help="Include hidden files and dot-directories.",
+    )
+    parser.add_argument(
+        "-x", "--exclude",
+        action="append",
+        default=DEFAULT_EXCLUDES,
+        metavar="PATTERN",
+        help="Universal exclude for files and directories (fnmatch). Repeatable. "
+             "Plain tokens act as substrings. Defaults to a comprehensive list including "
+             "node_modules, dist, build, .git, etc. User-provided patterns are added to defaults.",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default="~/Downloads/out.txt",
+        help="Output file when writing to a terminal (default: ~/out.txt). Ignored if stdout is redirected.",
+    )
+    args = parser.parse_args(argv)
+
+    exts: Optional[Set[str]] = None
+    if args.ext:
+        # normalize extensions: lowercase, no leading dot
+        exts = {ext[1:].lower() if ext.startswith(".") else ext.lower() for ext in args.ext}
+
+    root = Path.cwd()
+    max_depth = args.depth if args.depth is not None and args.depth >= 0 else None
+
+    # Load .gitignore and combine with defaults/user excludes
+    gitignore_patterns = load_gitignore(root)
+    all_excludes = (args.exclude or []) + gitignore_patterns
+
+    files = iter_files(
+        root=root,
+        exts=exts,
+        include_hidden=args.hidden,
+        excludes=all_excludes,
+        max_depth=max_depth,
+    )
+
+    files.sort(key=lambda p: str(p))
+
+    # Output: to file if TTY, else to stdout
+    if sys.stdout.isatty():
+        out_path = Path(os.path.expanduser(args.output))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w", encoding="utf-8", errors="replace") as out:
+            for fp in files:
+                print(f"===== {fp} ======", file=out)
+                try:
+                    with fp.open("r", encoding="utf-8", errors="replace") as f:
+                        for line in f:
+                            out.write(line)
+                except Exception as e:
+                    print(f"\n[treecat] error reading {fp}: {e}\n", file=out)
+                out.write("\n")
+        print(f"Output written to {out_path}")
+    else:
+        for fp in files:
+            print(f"===== {fp} ======")
+            try:
+                with fp.open("r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        sys.stdout.write(line)
+            except Exception as e:
+                print(f"\n[treecat] error reading {fp}: {e}\n")
+            sys.stdout.write("\n")
+
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

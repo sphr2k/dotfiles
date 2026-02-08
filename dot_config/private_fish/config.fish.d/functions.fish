@@ -56,25 +56,20 @@ function git-private --description 'git author: mail@janwerner.de'
     set -gx GITLAB_HOST gitlab.com
 end
 
+function git-aok --description 'git author: jan.werner@ext.sys.aok.de'
+    set -gx GIT_AUTHOR_NAME "Jan Werner"
+    set -gx GIT_AUTHOR_EMAIL "jan.werner@ext.sys.aok.de"
+    set -gx GIT_COMMITTER_NAME $GIT_AUTHOR_NAME
+    set -gx GIT_COMMITTER_EMAIL $GIT_AUTHOR_EMAIL
+    set -gx GITLAB_HOST gitlab.com
+end
+
 function git-skillbyte --description 'git author: jan.werner@skillbyte.de'
     set -gx GIT_AUTHOR_NAME "Jan Werner"
     set -gx GIT_AUTHOR_EMAIL "jan.werner@skillbyte.de"
     set -gx GIT_COMMITTER_NAME $GIT_AUTHOR_NAME
     set -gx GIT_COMMITTER_EMAIL $GIT_AUTHOR_EMAIL
     set -gx GITLAB_HOST gitlab.com
-end
-
-function git-d92mnm --description 'git author: d92mnm@protonmail.com'
-    set -gx GIT_AUTHOR_NAME "d92mnm"
-    set -gx GIT_AUTHOR_EMAIL "d92mnm@protonmail.com"
-    set -gx GIT_COMMITTER_NAME $GIT_AUTHOR_NAME
-    set -gx GIT_COMMITTER_EMAIL $GIT_AUTHOR_EMAIL
-end
-
-function create-python-venv
-    set -q argv[1]; or set argv[1] python3
-    echo "layout python $argv[1]" >.envrc
-    direnv allow
 end
 
 function watch --description 'modern watch'
