@@ -1,0 +1,59 @@
+#! /usr/bin/env python
+
+import shlex
+import subprocess
+import re
+import csv
+from io import StringIO
+from dataclasses import dataclass
+from typing import List, Dict, Any, Match, Optional
+
+device_pattern: str = "(Apple|Microsoft).+Keyboard"
+
+
+@dataclass
+class Device:
+    vendor_id: str
+    product_id: str
+    name: str
+
+
+def to_snake(name: str) -> str:
+    s1: str = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    s2: str = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+    return re.sub(r"\s+", "_", s2)
+
+
+def get_devices(output: str) -> List[Device]:
+    lines: List[str] = output.splitlines()
+
+    # Remove separator line
+    device_lines: List[str] = [line for line in lines if "---" not in line]
+
+    # Create TSV
+    processed_lines: List[str] = [re.sub(r"\s{2,}", "\t", line) for line in device_lines]
+
+    # Convert to single string
+    data: str = "\n".join(processed_lines)
+
+    # Read data using DictReader
+    reader = csv.DictReader(StringIO(data), delimiter="\t")
+
+    # Create Device instances
+    devices: List[Device] = []
+    for row in reader:
+        # Convert the CSV header names to snake case to match the dataclass field names
+        row_snake: Dict[str, Any] = {to_snake(k): v for k, v in row.items()}
+        devices.append(Device(**row_snake))
+
+    return devices
+
+
+output: str = subprocess.check_output(["kb-remap", "--list"], universal_newlines=True)
+devices: List[Device] = get_devices(output)
+
+for device in devices:
+    match: Optional[Match[str]] = re.match(pattern=device_pattern, string=device.name, flags=re.IGNORECASE)
+    if match:
+        command = f'kb-remap --name "{device.name}" --swap "rcommand:roption"'
+        subprocess.run(shlex.split(command))
