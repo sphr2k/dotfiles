@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+# pyright: strict
+from __future__ import annotations
+
+import os
+import sys
+import time
+import subprocess
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+from kubernetes import client, config, watch  # type: ignore[import-untyped]
+from kubernetes.client import (  # type: ignore[import-untyped]
+    CoreV1Api,
+    V1Pod,
+    V1ObjectMeta,
+    V1PodSpec,
+    V1Container,
+    V1Volume,
+    V1EmptyDirVolumeSource,
+    V1VolumeMount,
+    V1Toleration,
+)
+from iterfzf import iterfzf  # type: ignore[import-untyped]
+
+
+@dataclass(frozen=True)
+class DebugPodOptions:
+    namespace: str = "default"
+    image: str = "alpine/curl:latest"
+    container_name: str = "nettools"
+    volume_name: str = "tools"
+    mount_path: str = "/tools"
+    cpu_request: str = "50m"
+    mem_request: str = "64Mi"
+    cpu_limit: str = "100m"
+    mem_limit: str = "128Mi"
+    wait_timeout_seconds: int = 60
+    select_node_label: bool = False
+
+
+def list_node_labels(api: CoreV1Api) -> List[str]:
+    nodes = api.list_node().items  # type: ignore[attr-defined]
+    labels: set[str] = set()
+    for n in nodes:
+        md = n.metadata or V1ObjectMeta()
+        for k, v in (md.labels or {}).items():
+            labels.add(f"{k}={v}")
+    return sorted(labels)
+
+
+def tolerations_for_selector(api: CoreV1Api, key: str, value: str) -> List[V1Toleration]:
+    nodes = api.list_node(label_selector=f"{key}={value}").items  # type: ignore[attr-defined]
+    seen: set[Tuple[str, str, str]] = set()
+    t_list: List[V1Toleration] = []
+    for n in nodes:
+        taints = (n.spec.taints if n.spec and n.spec.taints else [])
+        for t in taints:
+            k = t.key or ""
+            v = t.value or ""
+            eff = t.effect or ""
+            tpl = (k, v, eff)
+            if tpl in seen:
+                continue
+            seen.add(tpl)
+            t_list.append(V1Toleration(key=k, operator="Equal", value=v, effect=eff))
+    return t_list
+
+
+def build_pod(name: str, opts: DebugPodOptions, node_selector: Optional[Dict[str, str]] = None, tolerations: Optional[List[V1Toleration]] = None) -> V1Pod:
+    vol = V1Volume(name=opts.volume_name, empty_dir=V1EmptyDirVolumeSource())
+    vm = V1VolumeMount(name=opts.volume_name, mount_path=opts.mount_path)
+    env = [client.V1EnvVar(name="PATH", value="/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")]  # type: ignore[attr-defined]
+
+    cmd = [
+        "sh", "-c",
+        # Install bash, curl, nslookup/dig (bind-tools), expose via /tools/bin, then sleep forever
+        "set -euxo pipefail; "
+        "echo 'Bootstrapping tools into /tools/bin...'; "
+        "mkdir -p /tools/bin; "
+        "apk add --no-cache bash curl bind-tools; "
+        "for b in /bin/bash /usr/bin/curl /usr/bin/nslookup /usr/bin/dig; do "
+        "  [ -x \"$b\" ] && ln -sf \"$b\" /tools/bin/$(basename \"$b\"); "
+        "done; "
+        "echo \"PATH=$PATH\"; "
+        "sleep infinity"
+    ]
+
+    container = V1Container(
+        name=opts.container_name,
+        image=opts.image,
+        env=env,
+        volume_mounts=[vm],
+        stdin=True,
+        tty=True,
+        command=cmd,
+        resources=client.V1ResourceRequirements(  # type: ignore[attr-defined]
+            requests={"cpu": opts.cpu_request, "memory": opts.mem_request},
+            limits={"cpu": opts.cpu_limit, "memory": opts.mem_limit},
+        ),
+    )
+
+    spec = V1PodSpec(
+        containers=[container],
+        restart_policy="Never",
+        volumes=[vol],
+        node_selector=node_selector,
+        tolerations=tolerations,
+    )
+
+    pod = V1Pod(
+        api_version="v1",
+        kind="Pod",
+        metadata=V1ObjectMeta(name=name),
+        spec=spec,
+    )
+    return pod
+
+
+def wait_pod_ready(api: CoreV1Api, namespace: str, name: str, timeout_s: int) -> bool:
+    w = watch.Watch()
+    start = time.time()
+    for event in w.stream(api.list_namespaced_pod, namespace=namespace, field_selector=f"metadata.name={name}", timeout_seconds=timeout_s):  # type: ignore[attr-defined]
+        obj: V1Pod = event["object"]
+        status = obj.status
+        if status and status.conditions:
+            for c in status.conditions:
+                if c.type == "Ready" and c.status == "True":
+                    w.stop()
+                    return True
+        if time.time() - start > timeout_s:
+            w.stop()
+            return False
+    return False
+
+
+def spawn_kubectl_exec(namespace: str, pod_name: str, container: str) -> None:
+    # Detect interactive TTY and set flags accordingly for the best UX
+    interactive = sys.stdin.isatty()
+    flags = ["-it"] if interactive else ["-i"]
+
+    # Probe shell candidates in order using kubectl test -x
+    candidates = ["/tools/bin/bash", "/bin/bash", "/bin/sh"]
+    chosen: Optional[str] = None
+    for cand in candidates:
+        rc = subprocess.run(
+            ["kubectl", "exec", pod_name, "-n", namespace, "-c", container, "--", "test", "-x", cand],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        ).returncode
+        if rc == 0:
+            chosen = cand
+            break
+    if chosen is None:
+        chosen = "/bin/sh"
+
+    print(f"✨ Exec into {pod_name} with {chosen} (Ctrl-D to exit) 🐚")
+    os.execvp("kubectl", ["kubectl", "exec", *flags, "-n", namespace, "-c", container, pod_name, "--", chosen])
+
+
+def main() -> None:
+    # Options from env/args
+    opts = DebugPodOptions(
+        namespace=os.environ.get("KNSLOOKUP_NS", "default"),
+        select_node_label="-n" in sys.argv[1:],
+    )
+
+    # Load kubeconfig or in-cluster config
+    try:
+        config.load_kube_config()  # Uses local kubeconfig if present
+    except Exception:
+        config.load_incluster_config()  # Fallback when running in a Pod
+
+    v1: CoreV1Api = client.CoreV1Api()
+
+    node_selector: Optional[Dict[str, str]] = None
+    tolerations: Optional[List[V1Toleration]] = None
+
+    if opts.select_node_label:
+        labels = list_node_labels(v1)
+        if labels:
+            choice = iterfzf(labels, prompt="🏷️  Select node label (key=value): ")
+            if choice:
+                key, _, val = choice.partition("=")
+                if key and val:
+                    node_selector = {key: val}
+                    tolerations = tolerations_for_selector(v1, key, val)
+
+    pod_name = f"temp-ns-{int(time.time())}"
+    pod = build_pod(pod_name, opts, node_selector, tolerations)
+
+    # Create, replacing if exists
+    try:
+        v1.create_namespaced_pod(namespace=opts.namespace, body=pod)  # type: ignore[attr-defined]
+        print(f"🚀 pod/{pod_name} created")
+    except client.exceptions.ApiException as e:  # type: ignore[attr-defined]
+        if e.status == 409:
+            print("♻️  Existing pod name conflict, replacing…")
+            v1.delete_namespaced_pod(name=pod_name, namespace=opts.namespace)  # type: ignore[attr-defined]
+            # wait for deletion
+            for _ in range(120):
+                try:
+                    v1.read_namespaced_pod(name=pod_name, namespace=opts.namespace)  # type: ignore[attr-defined]
+                    time.sleep(0.25)
+                except client.exceptions.ApiException as e2:  # type: ignore[attr-defined]
+                    if e2.status == 404:
+                        break
+                    else:
+                        raise
+            v1.create_namespaced_pod(namespace=opts.namespace, body=pod)  # type: ignore[attr-defined]
+            print(f"🚀 pod/{pod_name} recreated")
+        else:
+            raise
+
+    print("⏳ Waiting for Ready condition…")
+    if wait_pod_ready(v1, opts.namespace, pod_name, opts.wait_timeout_seconds):
+        print(f"✅ pod/{pod_name} Ready")
+    else:
+        print("❌ Pod failed to become Ready within timeout", file=sys.stderr)
+        try:
+            v1.delete_namespaced_pod(name=pod_name, namespace=opts.namespace)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        sys.exit(1)
+
+    # Hand off to kubectl for interactive exec to avoid stream TTY quirks
+    try:
+        spawn_kubectl_exec(opts.namespace, pod_name, opts.container_name)
+    finally:
+        # If kubectl returns instead of replacing this process, do cleanup
+        try:
+            print("🧹 Cleaning up…")
+            v1.delete_namespaced_pod(name=pod_name, namespace=opts.namespace)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    main()

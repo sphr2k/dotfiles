@@ -1,0 +1,51 @@
+#!/usr/bin/env fish
+# Concatenate files by extensions into one file with path delimiters.
+
+# Flags:
+#   --ext       (repeatable) file extensions to include (with or without dot)
+#   --output    path to output file (default: $WINHOME/out.txt)
+#   --dotdirs   include dot-directories (hidden dirs) in the walk; default is exclude
+#   --depth     max depth to search (optional)
+
+argparse --name=treecat --max-args=0 'ext=+' 'output=' 'dotdirs' 'depth=' -- $argv
+or begin
+    echo "Usage: treecat --ext .txt [.md ...] [--output out.txt] [--dotdirs] [--depth N]" 1>&2
+    exit 1
+end
+
+set -l OUTPUT "$WINHOME/out.txt"
+set -q _flag_output; and set OUTPUT $_flag_output
+
+# Build find predicates for provided extensions (case-insensitive)
+set -l pats
+for e in $_flag_ext
+    set -l bare (string replace -r '^\.' '' -- $e)
+    set pats $pats -o -iname "*.$bare"
+end
+test (count $pats) -gt 0; and set pats \( $pats[2..-1] \) -type f; or set pats -type f
+
+# Prepare output
+mkdir -p (dirname -- $OUTPUT)
+printf '' > $OUTPUT
+
+# Build hidden-dir pruning (default on; --dotdirs disables it)
+set -l prune_hidden
+if not set -q _flag_dotdirs
+    set prune_hidden -path '*/.*' -prune -o
+end
+
+# Add max depth if specified
+set -l depth_args
+if set -q _flag_depth
+    set depth_args -maxdepth $_flag_depth
+end
+
+# Walk files, skip the output file itself, write delimiter + content
+find . $depth_args $prune_hidden \( $pats \) -print0 \
+| sort -z \
+| while read -lz f
+    test (realpath -m -- $f) = (realpath -m -- $OUTPUT); and continue
+    printf '===== %s =====\n' $f >> $OUTPUT
+    cat -- $f >> $OUTPUT
+    printf '\n' >> $OUTPUT
+end

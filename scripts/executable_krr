@@ -1,0 +1,35 @@
+#!/usr/bin/env fish
+
+function krr --wraps "$HOME/tools/krr/dist/krr/krr"
+    set krr_binary "$HOME/tools/krr/dist/krr/krr"
+
+    set cloud_arg $argv[1]
+    set env_arg $argv[2]
+    set cmd_args $argv[3..-1]
+
+    # Map cloud+env to kubeconfig path
+    switch "$cloud_arg-$env_arg"
+        case "gcp-stg"
+            set kubeconfig_path "$HOME/.kube/kubeconfigs/gcp-staging"
+            set prometheus_service "prometheus-stack-prometheus:9090"
+        case "gcp-prd"
+            set kubeconfig_path "$HOME/.kube/kubeconfigs/gcp-production"
+            set prometheus_service "prometheus-production-kube-prometheus:9090"
+        case "aws-stg"
+            set kubeconfig_path "$HOME/.kube/kubeconfigs/houston-staging-cluster"
+            set prometheus_service "kube-prometheus-stack-prometheus:9090"
+        case "aws-prd"
+            set kubeconfig_path "$HOME/.kube/kubeconfigs/houston-production-cluster"
+            set prometheus_service "kube-prometheus-stack-prometheus:9090"
+        case '*'
+            echo "Usage: krr [gcp|aws] [stg|prd] [options]"
+            return 1
+    end
+
+    set cluster_url (kubectl --kubeconfig $kubeconfig_path config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    set cmd_args $cmd_args "--prometheus-url" "$cluster_url/api/v1/namespaces/monitoring/services/$prometheus_service/proxy"
+    
+    env KUBECONFIG=$kubeconfig_path $krr_binary $cmd_args
+end
+
+krr $argv

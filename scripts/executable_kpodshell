@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# -------------------------------------------------------------------
+# kps: FZF-based Kubernetes pod shell helper
+# Requires: kubectl, fzf, and bash
+# -------------------------------------------------------------------
+
+set -euo pipefail
+
+# You can customize the default shell fallback order
+SHELLS=("bash" "sh")
+
+# Select a pod interactively with fzf
+select_pod() {
+  # Get only running pods
+  local pods
+  pods=$(kubectl get pods --no-headers --field-selector=status.phase=Running -o custom-columns=":metadata.name")
+
+  # Cancel early if no running pods
+  if [[ -z "$pods" ]]; then
+    echo "❌ No running pods found in current namespace." >&2
+    exit 1
+  fi
+
+  # Use fzf to pick a pod
+  echo "$pods" | fzf --prompt="Select Pod > " --height=20 --reverse
+}
+
+# Select a container (if multiple exist in a pod)
+select_container() {
+  local pod="$1"
+  local count
+  count=$(kubectl get pod "$pod" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | wc -w)
+  if (( count > 1 )); then
+    kubectl get pod "$pod" -o jsonpath='{.spec.containers[*].name}' \
+      | tr ' ' '\n' \
+      | fzf --prompt="Select Container > " --height=10 --reverse
+  else
+    kubectl get pod "$pod" -o jsonpath='{.spec.containers[0].name}'
+  fi
+}
+
+# Try to exec into the pod
+exec_pod_shell() {
+  local pod="$1"
+  local container="$2"
+
+  for shell in "${SHELLS[@]}"; do
+    if kubectl exec "$pod" -c "$container" -- "${shell}" -c "exit" &>/dev/null; then
+      echo "Launching $shell in $pod ($container)..."
+      kubectl exec -it "$pod" -c "$container" -- "$shell"
+      return
+    fi
+  done
+
+  echo "❌ No viable shell found in container $container of pod $pod" >&2
+}
+
+main() {
+  POD=$(select_pod)
+  [[ -z "$POD" ]] && echo "No pod selected" && exit 1
+
+  CONTAINER=$(select_container "$POD")
+  [[ -z "$CONTAINER" ]] && echo "No container selected" && exit 1
+
+  exec_pod_shell "$POD" "$CONTAINER"
+}
+
+main "$@"
