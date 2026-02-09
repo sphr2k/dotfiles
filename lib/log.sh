@@ -1,7 +1,5 @@
-#! /usr/bin/env bash
-
-# Shared log helpers for .chezmoiscripts. Source with:
-#   _d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; [ -f "${_d}/log.sh" ] && source "${_d}/log.sh"
+# Shared log helper for .chezmoiscripts. Source only (do not execute).
+# Usage: source from run_ scripts via CHEZMOI_SOURCE_DIR or script-relative path.
 
 if [ -t 2 ]; then
   _log_c_red='\033[0;31m'
