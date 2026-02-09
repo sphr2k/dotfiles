@@ -1,3 +1,5 @@
+#! /usr/bin/env bash
+
 # Shared log helpers for .chezmoiscripts. Source with:
 #   _d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; [ -f "${_d}/log.sh" ] && source "${_d}/log.sh"
 
